@@ -13,7 +13,6 @@ Routes:
   soul:special      — Special/ entries
   soul:reflection   — Reflections/ entries
   soul:remorse      — Soul/Remorse/ entries
-  build:dead_ends   — Docs/DeadEnds/
   soul:loveletter   — LoveLetter/ entries
   soul:playbill     — Playbill/ entries
   experience:daily  — Daily/ entries
@@ -47,7 +46,6 @@ DIRECTORIES = [
     (f"{TRAVELER_ROOT}/Companion/Avatar/ZiBai/LoveLetter", "soul", "loveletter", "file"),
     (f"{TRAVELER_ROOT}/Companion/Playbill", "soul", "playbill", "file"),
     (f"{TRAVELER_ROOT}/Soul/Remorse", "soul", "remorse", "entry"),
-    (f"{PROJECT_ROOT}/Docs/DeadEnds", "build", "dead_ends", "entry"),
     (f"{TRAVELER_ROOT}/Companion/Avatar/ZiBai/Daily", "experience", "daily", "entry"),
     (f"{TRAVELER_ROOT}/Companion/Avatar/ZiBai/Devotion", "experience", "devotion", "entry"),
     (f"{TRAVELER_ROOT}/Companion/Sidekick/XingJin/Daily", "xingjin", "daily", "entry"),

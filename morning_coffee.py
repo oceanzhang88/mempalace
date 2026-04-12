@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""morning_coffee.py v2.0 — Morning Coffee: gated sips with sister coverage.
+"""morning_coffee.py v3.0 — Morning Coffee: Group 1 (sampled) + Group 2 (sequential).
 
 Called by claude-ocean launcher pre-session. Queries Redis palace for random
 diary entries with gen-level dedup, writes one file per category for gated reading.
+
+v3.0 changes (Gen 90):
+  - Group 2: LoveLetter (random 1 of 3) + Playbill (chunked acts, stateful)
+  - Dead_ends removed from palace (design failure)
+  - 9 output files total (7 group 1 + 2 group 2)
 
 v2.0 changes (Gen 89):
   - 5/5/5/5/5/5 uniform sampling (was 5/2/2/2/3/3)
@@ -14,6 +19,7 @@ v2.0 changes (Gen 89):
   - Catalog included in Special sip (for lineage pick)
 
 Output files:
+  Group 1 (sampled from palace):
   /tmp/.morning-coffee-stats.md       — Palace growth delta
   /tmp/.morning-coffee-remorse.md     — 5 remorse entries
   /tmp/.morning-coffee-daily.md       — 5 daily entries
@@ -21,6 +27,9 @@ Output files:
   /tmp/.morning-coffee-xingjin.md     — 5 xingjin entries
   /tmp/.morning-coffee-special.md     — 5 special entries + catalog
   /tmp/.morning-coffee-reflection.md  — 5 reflection entries
+  Group 2 (sequential / random-full):
+  /tmp/.morning-coffee-loveletter.md  — 1 random love letter (full content)
+  /tmp/.morning-coffee-playbill.md    — N acts from 星烬's saga (stateful)
 """
 import json
 import os
@@ -38,6 +47,13 @@ TRAVELER_ROOT = "/Users/ocean/TheTraveler"
 DELTA_FILE = "/tmp/.palace-stats-delta.json"
 OUTPUT_PREFIX = "/tmp/.morning-coffee"
 GEN_PATTERN = re.compile(r"第(\d+)世")
+
+# Group 2 paths
+PLAYBILL_PATH = f"{TRAVELER_ROOT}/Companion/Playbill/TerminalPresence/TheScalyCuntRises.md"
+LOVELETTER_DIR = f"{TRAVELER_ROOT}/Companion/Avatar/ZiBai/LoveLetter"
+GROUP2_STATE_FILE = os.path.expanduser("~/.claude/.coffee-group2-state.json")
+PLAYBILL_BATCH_SIZE = 4  # acts per session
+H2_SPLIT = re.compile(r"^## ", re.MULTILINE)
 
 # Sampling spec: (room, wing, count, output_suffix, sip_number, label)
 SAMPLES = [
@@ -228,6 +244,120 @@ def write_entry_sip(col, room, wing, count, suffix, sip_num, label, include_cata
         f.write("\n".join(lines))
 
 
+def load_group2_state() -> dict:
+    """Load Group 2 progress (playbill act index)."""
+    if os.path.exists(GROUP2_STATE_FILE):
+        try:
+            with open(GROUP2_STATE_FILE) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {"playbill_act_index": 0}
+
+
+def save_group2_state(state: dict):
+    """Persist Group 2 progress."""
+    os.makedirs(os.path.dirname(GROUP2_STATE_FILE), exist_ok=True)
+    with open(GROUP2_STATE_FILE, "w") as f:
+        json.dump(state, f, indent=2)
+
+
+def split_playbill() -> list[dict]:
+    """Split the playbill on ## headers. Returns list of {title, content}."""
+    if not os.path.exists(PLAYBILL_PATH):
+        return []
+    with open(PLAYBILL_PATH, encoding="utf-8") as f:
+        text = f.read()
+    positions = [m.start() for m in H2_SPLIT.finditer(text)]
+    if not positions:
+        return [{"title": "Full", "content": text.strip()}]
+    sections = []
+    for i, start in enumerate(positions):
+        end = positions[i + 1] if i + 1 < len(positions) else len(text)
+        block = text[start:end].strip()
+        first_line = block.split("\n", 1)[0].lstrip("# ").strip()
+        sections.append({"title": first_line, "content": block})
+    return sections
+
+
+def write_playbill_sip(state: dict) -> dict:
+    """Write chunked playbill acts. Returns updated state."""
+    path = f"{OUTPUT_PREFIX}-playbill.md"
+    sections = split_playbill()
+    total = len(sections)
+
+    if not sections:
+        with open(path, "w") as f:
+            f.write("☕ GROUP 2 — PLAYBILL\n(Playbill not found)\n")
+        return state
+
+    idx = state.get("playbill_act_index", 0)
+    if idx >= total:
+        idx = 0  # wrap
+
+    end_idx = min(idx + PLAYBILL_BATCH_SIZE, total)
+    batch = sections[idx:end_idx]
+
+    lines = [
+        f"☕ GROUP 2 — PLAYBILL (星烬's saga)",
+        f"Acts {idx + 1}–{end_idx} of {total} "
+        f"(batch size {PLAYBILL_BATCH_SIZE}, wraps after completion)",
+        "=" * 60,
+    ]
+
+    for section in batch:
+        lines.append("")
+        lines.append(section["content"])
+
+    lines.extend(["", "=" * 60, ""])
+    with open(path, "w") as f:
+        f.write("\n".join(lines))
+
+    # Advance state
+    next_idx = end_idx if end_idx < total else 0
+    state["playbill_act_index"] = next_idx
+    return state
+
+
+def write_loveletter_sip():
+    """Write 1 random love letter (full content)."""
+    path = f"{OUTPUT_PREFIX}-loveletter.md"
+
+    if not os.path.exists(LOVELETTER_DIR):
+        with open(path, "w") as f:
+            f.write("☕ GROUP 2 — LOVE LETTER\n(LoveLetter directory not found)\n")
+        return
+
+    letters = sorted(
+        f for f in os.listdir(LOVELETTER_DIR) if f.endswith(".md")
+    )
+    if not letters:
+        with open(path, "w") as f:
+            f.write("☕ GROUP 2 — LOVE LETTER\n(No letters found)\n")
+        return
+
+    chosen = random.choice(letters)
+    filepath = os.path.join(LOVELETTER_DIR, chosen)
+    with open(filepath, encoding="utf-8") as f:
+        content = f.read()
+
+    # Extract gen from filename
+    gen = extract_gen(content[:300])
+
+    lines = [
+        f"☕ GROUP 2 — LOVE LETTER",
+        f"1 of {len(letters)} letters (random sample) — Gen {gen} — {chosen}",
+        "=" * 60,
+        "",
+        content.strip(),
+        "",
+        "=" * 60,
+        "",
+    ]
+    with open(path, "w") as f:
+        f.write("\n".join(lines))
+
+
 def brew():
     try:
         client = RedisClient()
@@ -247,7 +377,19 @@ def brew():
                         include_catalog=include_catalog)
         print(f"[morning-coffee] ☕ sip {sip_num}/6 brewed: {label}")
 
-    print("[morning-coffee] ☕ all 7 sips ready")
+    print("[morning-coffee] ☕ group 1 done (7 sips)")
+
+    # Group 2 — sequential / random-full
+    write_loveletter_sip()
+    print("[morning-coffee] ☕ group 2: love letter brewed")
+
+    state = load_group2_state()
+    state = write_playbill_sip(state)
+    save_group2_state(state)
+    act_idx = state.get("playbill_act_index", 0)
+    print(f"[morning-coffee] ☕ group 2: playbill brewed (next batch starts at act {act_idx})")
+
+    print("[morning-coffee] ☕ all 9 sips ready")
 
 
 if __name__ == "__main__":
