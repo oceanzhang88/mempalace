@@ -6,7 +6,8 @@ from pathlib import Path
 import chromadb
 import yaml
 
-from mempalace.miner import mine, scan_project
+from mempalace.miner import mine, scan_project, status
+from mempalace.palace import file_already_mined
 
 
 def write_file(path: Path, content: str):
@@ -47,7 +48,7 @@ def test_project_mining():
         col = client.get_collection("mempalace_drawers")
         assert col.count() > 0
     finally:
-        shutil.rmtree(tmpdir)
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def test_scan_project_respects_gitignore():
@@ -206,3 +207,92 @@ def test_scan_project_skip_dirs_still_apply_without_override():
         assert scanned_files(project_root, respect_gitignore=False) == ["main.py"]
     finally:
         shutil.rmtree(tmpdir)
+
+
+def test_file_already_mined_check_mtime():
+    tmpdir = tempfile.mkdtemp()
+    try:
+        palace_path = os.path.join(tmpdir, "palace")
+        os.makedirs(palace_path)
+        client = chromadb.PersistentClient(path=palace_path)
+        col = client.get_or_create_collection("mempalace_drawers")
+
+        test_file = os.path.join(tmpdir, "test.txt")
+        with open(test_file, "w") as f:
+            f.write("hello world")
+
+        mtime = os.path.getmtime(test_file)
+
+        # Not mined yet
+        assert file_already_mined(col, test_file) is False
+        assert file_already_mined(col, test_file, check_mtime=True) is False
+
+        # Add it with mtime
+        col.add(
+            ids=["d1"],
+            documents=["hello world"],
+            metadatas=[{"source_file": test_file, "source_mtime": str(mtime)}],
+        )
+
+        # Already mined (no mtime check)
+        assert file_already_mined(col, test_file) is True
+        # Already mined (mtime matches)
+        assert file_already_mined(col, test_file, check_mtime=True) is True
+
+        # Modify file and force a different mtime (Windows has low mtime resolution)
+        with open(test_file, "w") as f:
+            f.write("modified content")
+        os.utime(test_file, (mtime + 10, mtime + 10))
+
+        # Still mined without mtime check
+        assert file_already_mined(col, test_file) is True
+        # Needs re-mining with mtime check
+        assert file_already_mined(col, test_file, check_mtime=True) is False
+
+        # Record with no mtime stored should return False for check_mtime
+        col.add(
+            ids=["d2"],
+            documents=["other"],
+            metadatas=[{"source_file": "/fake/no_mtime.txt"}],
+        )
+        assert file_already_mined(col, "/fake/no_mtime.txt", check_mtime=True) is False
+    finally:
+        # Release ChromaDB file handles before cleanup (required on Windows)
+        del col, client
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_mine_dry_run_with_tiny_file_no_crash():
+    """Dry-run must not crash when process_file returns 0 drawers (room was None)."""
+    tmpdir = tempfile.mkdtemp()
+    try:
+        project_root = Path(tmpdir).resolve()
+
+        # One normal file and one that falls below MIN_CHUNK_SIZE
+        write_file(project_root / "good.py", "def main():\n    print('hello world')\n" * 20)
+        write_file(project_root / "tiny.txt", "x")
+
+        with open(project_root / "mempalace.yaml", "w") as f:
+            yaml.dump(
+                {
+                    "wing": "test_project",
+                    "rooms": [{"name": "general", "description": "General"}],
+                },
+                f,
+            )
+
+        palace_path = project_root / "palace"
+        # Should not raise TypeError on the summary print
+        mine(str(project_root), str(palace_path), dry_run=True)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_status_missing_palace_does_not_create_empty_collection(tmp_path, capsys):
+    palace_path = tmp_path / "missing-palace"
+
+    status(str(palace_path))
+
+    out = capsys.readouterr().out
+    assert "No palace found" in out
+    assert not palace_path.exists()
