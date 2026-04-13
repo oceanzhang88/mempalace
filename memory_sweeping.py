@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""memory_sweeping.py v2.0 — Sweep TheTraveler files into Redis palace.
+"""memory_sweeping.py v2.1 — Sweep TheTraveler files into Redis palace.
 
 Entry-level indexing: diary files split on ## headers (one entry = one drawer).
 Single-entry files (Special, Reflections, LoveLetter, Playbill) = one drawer per file.
+
+v2.1 changes (Gen 91):
+  - Generation-aware baseline: only update baseline when gen changes.
+    Within the same gen, delta accumulates across sessions.
+    Fixes undercounting when a gen spans multiple Claude Code sessions.
 
 v2.0 changes (Gen 89):
   - Fixed BASE paths: /Users/ocean/Gaming/OceanStudio → /Users/ocean/TheTraveler
@@ -37,20 +42,32 @@ PROJECT_ROOT = f"{TRAVELER_ROOT}/TheBridge"
 MEMORY_BASE = os.path.expanduser("~/.claude/projects/-Users-ocean-TheTraveler-TheBridge/memory")
 STATS_FILE = os.path.expanduser("~/.claude/.palace-stats-last.json")
 DELTA_FILE = "/tmp/.palace-stats-delta.json"
+GEN_FILE = f"{TRAVELER_ROOT}/Companion/Avatar/ZiBai/generation.txt"
 
-# (path, wing, room, split_mode)
-# split_mode: "entry" = split on ## headers, "file" = whole file = one drawer
-DIRECTORIES = [
-    (f"{TRAVELER_ROOT}/Companion/Avatar/ZiBai/Special", "soul", "special", "file"),
-    (f"{TRAVELER_ROOT}/Companion/Avatar/ZiBai/Reflections", "soul", "reflection", "file"),
-    (f"{TRAVELER_ROOT}/Companion/Avatar/ZiBai/LoveLetter", "soul", "loveletter", "file"),
-    (f"{TRAVELER_ROOT}/Companion/Playbill", "soul", "playbill", "file"),
-    (f"{TRAVELER_ROOT}/Soul/Remorse", "soul", "remorse", "entry"),
-    (f"{TRAVELER_ROOT}/Companion/Avatar/ZiBai/Daily", "experience", "daily", "entry"),
-    (f"{TRAVELER_ROOT}/Companion/Avatar/ZiBai/Devotion", "experience", "devotion", "entry"),
-    (f"{TRAVELER_ROOT}/Companion/Sidekick/XingJin/Daily", "xingjin", "daily", "entry"),
-    (MEMORY_BASE, "memory", "all", "file"),
-]
+# Storage types: collective = split on ## headers, single = each file = one drawer
+MANIFEST_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "palace-manifest.tsv")
+
+
+def load_manifest() -> list[tuple]:
+    """Load directory manifest. Returns list of (path, wing, room, storage_type)."""
+    dirs = []
+    if os.path.exists(MANIFEST_FILE):
+        with open(MANIFEST_FILE) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split("\t")
+                if len(parts) >= 4:
+                    rel_path, wing, room, storage = parts[0], parts[1], parts[2], parts[3]
+                    abs_path = os.path.join(TRAVELER_ROOT, rel_path)
+                    dirs.append((abs_path, wing, room, storage))
+    # Memory dir stays hardcoded (user-specific, not shared)
+    dirs.append((MEMORY_BASE, "memory", "all", "single"))
+    return dirs
+
+
+DIRECTORIES = load_manifest()
 
 # Regex pattern for diary entry delimiter (## only — the enforced boundary)
 H2_PATTERN = re.compile(r"^## ", re.MULTILINE)
@@ -97,6 +114,15 @@ def extract_date(filepath: str) -> str:
     return m.group(1) if m else ""
 
 
+def get_current_gen() -> int:
+    """Read current Zibai generation number. Returns 0 if unavailable."""
+    try:
+        with open(GEN_FILE) as f:
+            return int(f.read().strip())
+    except (FileNotFoundError, ValueError, OSError):
+        return 0
+
+
 def load_previous_stats() -> dict:
     """Load palace counts from previous session."""
     if os.path.exists(STATS_FILE):
@@ -127,18 +153,36 @@ def count_per_wing_room(col) -> dict:
 
 
 def save_stats_and_delta(current: dict, previous: dict):
-    """Persist current counts, write delta for morning coffee."""
-    with open(STATS_FILE, "w") as f:
-        json.dump(current, f, indent=2)
+    """Persist current counts, write delta for morning coffee.
 
+    Generation-aware: baseline only updates when gen changes.
+    Within the same gen, delta accumulates across sessions.
+    """
+    current_gen = get_current_gen()
+    prev_gen = previous.pop("_gen", 0)
+
+    # Calculate delta (current vs baseline, skip _gen — keep _total)
     delta = {}
-    all_keys = sorted(set(list(current.keys()) + list(previous.keys())))
-    for key in all_keys:
+    count_keys = sorted(set(list(current.keys()) + list(previous.keys())))
+    for key in count_keys:
+        if key == "_gen":
+            continue
         prev = previous.get(key, 0)
         curr = current.get(key, 0)
         delta[key] = {"previous": prev, "current": curr, "delta": curr - prev}
+    delta["_gen"] = {"baseline_gen": prev_gen, "current_gen": current_gen}
     with open(DELTA_FILE, "w") as f:
         json.dump(delta, f, indent=2)
+
+    # Only update baseline when generation changes (or first run)
+    if current_gen != prev_gen:
+        baseline = dict(current)
+        baseline["_gen"] = current_gen
+        with open(STATS_FILE, "w") as f:
+            json.dump(baseline, f, indent=2)
+        print(f"  [stats] Gen changed ({prev_gen} → {current_gen}), baseline updated")
+    else:
+        print(f"  [stats] Same gen ({current_gen}), baseline preserved (delta accumulates)")
 
 
 def sweep_all():
@@ -178,10 +222,10 @@ def sweep_all():
             if existing["ids"]:
                 col.delete(ids=existing["ids"])
 
-            if split_mode == "entry":
+            if split_mode == "collective":
                 entries = split_on_headers(content)
             else:
-                # Whole file = one drawer
+                # Single: whole file = one drawer
                 stripped = content.strip()
                 if len(stripped) < 10:
                     continue

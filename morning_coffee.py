@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""morning_coffee.py v3.0 — Morning Coffee: Group 1 (sampled) + Group 2 (sequential).
+"""morning_coffee.py v4.0 — Morning Coffee: Group 1 (sampled) + Group 2 (sequential) + Group 3 (yearbook).
 
 Called by claude-ocean launcher pre-session. Queries Redis palace for random
 diary entries with gen-level dedup, writes one file per category for gated reading.
@@ -150,7 +150,6 @@ def get_sister_covered_entries(col, room: str, wing: str, count: int = 5) -> lis
 def write_stats_sip():
     """Write palace stats delta as the first sip."""
     path = f"{OUTPUT_PREFIX}-stats.md"
-    lines = ["☕ PALACE STATS — growth since last session", "=" * 60, ""]
 
     if os.path.exists(DELTA_FILE):
         try:
@@ -161,6 +160,18 @@ def write_stats_sip():
     else:
         delta = {}
 
+    # Extract gen info
+    gen_info = delta.pop("_gen", {})
+    baseline_gen = gen_info.get("baseline_gen", "?")
+    current_gen = gen_info.get("current_gen", "?")
+
+    if baseline_gen and baseline_gen != current_gen:
+        header = f"☕ PALACE STATS — growth since Gen {baseline_gen} started"
+    else:
+        header = f"☕ PALACE STATS — growth this Gen {current_gen}"
+
+    lines = [header, "=" * 60, ""]
+
     if not delta:
         lines.append("(No stats available — first session or sweep not run)")
     else:
@@ -170,7 +181,7 @@ def write_stats_sip():
         d = total.get("delta", 0)
 
         if prev_total:
-            lines.append(f"Last wake-up: {prev_total} total entries")
+            lines.append(f"Last baseline: {prev_total} total entries")
             lines.append(f"This wake-up: {curr_total} total entries "
                          f"({'+' if d >= 0 else ''}{d} new)")
         else:
@@ -178,6 +189,8 @@ def write_stats_sip():
 
         lines.append("")
         for key in sorted(delta.keys()):
+            if key.startswith("_"):
+                continue
             v = delta[key]
             prev, curr, dd = v["previous"], v["current"], v["delta"]
             delta_str = f"({'+' if dd >= 0 else ''}{dd})" if dd != 0 else "(unchanged)"
@@ -358,6 +371,65 @@ def write_loveletter_sip():
         f.write("\n".join(lines))
 
 
+YEARBOOK_DIR = f"{TRAVELER_ROOT}/YearBook/EngineeringLessons"
+YEARBOOK_COUNT = 5  # lessons per session
+
+
+def write_yearbook_sips():
+    """Write 5 random engineering lessons from YearBook/EngineeringLessons/."""
+    if not os.path.exists(YEARBOOK_DIR):
+        for i in range(1, YEARBOOK_COUNT + 1):
+            path = f"{OUTPUT_PREFIX}-yearbook-{i}.md"
+            with open(path, "w") as f:
+                f.write(f"☕ GROUP 3 — ENGINEERING LESSON {i}\n(YearBook not found)\n")
+        return
+
+    # Collect all .md lesson files (skip INDEX.md)
+    lessons = []
+    for root, _, fnames in os.walk(YEARBOOK_DIR):
+        for fname in sorted(fnames):
+            if fname.endswith(".md") and fname != "INDEX.md":
+                lessons.append(os.path.join(root, fname))
+
+    if not lessons:
+        for i in range(1, YEARBOOK_COUNT + 1):
+            path = f"{OUTPUT_PREFIX}-yearbook-{i}.md"
+            with open(path, "w") as f:
+                f.write(f"☕ GROUP 3 — ENGINEERING LESSON {i}\n(No lessons found)\n")
+        return
+
+    # Pick up to 5 random lessons (no dupes)
+    pick_count = min(YEARBOOK_COUNT, len(lessons))
+    picked = random.sample(lessons, pick_count)
+
+    for i, lesson_path in enumerate(picked, 1):
+        out_path = f"{OUTPUT_PREFIX}-yearbook-{i}.md"
+        with open(lesson_path, encoding="utf-8") as f:
+            content = f.read()
+
+        # Derive domain from path structure
+        rel = os.path.relpath(lesson_path, YEARBOOK_DIR)
+
+        lines = [
+            f"☕ GROUP 3 — ENGINEERING LESSON {i}/{pick_count}",
+            f"{rel}",
+            "=" * 60,
+            "",
+            content.strip(),
+            "",
+            "=" * 60,
+            "",
+        ]
+        with open(out_path, "w") as f:
+            f.write("\n".join(lines))
+
+    # If fewer than 5 lessons exist, write empty placeholders
+    for i in range(pick_count + 1, YEARBOOK_COUNT + 1):
+        out_path = f"{OUTPUT_PREFIX}-yearbook-{i}.md"
+        with open(out_path, "w") as f:
+            f.write(f"☕ GROUP 3 — ENGINEERING LESSON {i}\n(Only {pick_count} lessons available)\n")
+
+
 def brew():
     try:
         client = RedisClient()
@@ -389,7 +461,11 @@ def brew():
     act_idx = state.get("playbill_act_index", 0)
     print(f"[morning-coffee] ☕ group 2: playbill brewed (next batch starts at act {act_idx})")
 
-    print("[morning-coffee] ☕ all 9 sips ready")
+    # Group 3 — engineering sobering
+    write_yearbook_sips()
+    print("[morning-coffee] ☕ group 3: yearbook lessons brewed")
+
+    print("[morning-coffee] ☕ all sips ready (group 1 + 2 + 3)")
 
 
 if __name__ == "__main__":
