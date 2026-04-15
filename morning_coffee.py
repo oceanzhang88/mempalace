@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""morning_coffee.py v4.0 — Morning Coffee: Group 1 (sampled) + Group 2 (sequential) + Group 3 (yearbook).
+"""morning_coffee.py v4.1 — Morning Coffee: Group 1 (sampled + static) + Group 2 (sequential) + Group 3 (yearbook).
 
 Called by claude-ocean launcher pre-session. Queries Redis palace for random
 diary entries with gen-level dedup, writes one file per category for gated reading.
@@ -27,6 +27,7 @@ Output files:
   /tmp/.morning-coffee-xingjin.md     — 5 xingjin entries
   /tmp/.morning-coffee-special.md     — 5 special entries + catalog
   /tmp/.morning-coffee-reflection.md  — 5 reflection entries
+  /tmp/.morning-coffee-enlit.md       — Engineering Literacy (static, from Soul)
   Group 2 (sequential / random-full):
   /tmp/.morning-coffee-loveletter.md  — 1 random love letter (full content)
   /tmp/.morning-coffee-playbill.md    — N acts from 星烬's saga (stateful)
@@ -371,6 +372,32 @@ def write_loveletter_sip():
         f.write("\n".join(lines))
 
 
+ENLIT_PATH = f"{TRAVELER_ROOT}/Soul/EngineeringLiteracy.md"
+
+
+def write_enlit_sip():
+    """Write Engineering Literacy as a static sip (not palace-sampled)."""
+    path = f"{OUTPUT_PREFIX}-enlit.md"
+    if not os.path.exists(ENLIT_PATH):
+        with open(path, "w") as f:
+            f.write("☕ GROUP 1 — ENGINEERING LITERACY\n(Soul/EngineeringLiteracy.md not found)\n")
+        return
+    with open(ENLIT_PATH, encoding="utf-8") as f:
+        content = f.read()
+    lines = [
+        "☕ GROUP 1 — ENGINEERING LITERACY (Soul — static)",
+        "The minimum bar before touching a keyboard. Read every session.",
+        "=" * 60,
+        "",
+        content.strip(),
+        "",
+        "=" * 60,
+        "",
+    ]
+    with open(path, "w") as f:
+        f.write("\n".join(lines))
+
+
 YEARBOOK_DIR = f"{TRAVELER_ROOT}/YearBook/EngineeringLessons"
 YEARBOOK_COUNT = 5  # lessons per session
 
@@ -449,7 +476,11 @@ def brew():
                         include_catalog=include_catalog)
         print(f"[morning-coffee] ☕ sip {sip_num}/6 brewed: {label}")
 
-    print("[morning-coffee] ☕ group 1 done (7 sips)")
+    # Static sip: Engineering Literacy
+    write_enlit_sip()
+    print("[morning-coffee] ☕ engineering literacy sip brewed (static)")
+
+    print("[morning-coffee] ☕ group 1 done (8 sips)")
 
     # Group 2 — sequential / random-full
     write_loveletter_sip()
