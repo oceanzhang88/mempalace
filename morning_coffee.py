@@ -53,7 +53,6 @@ GEN_PATTERN = re.compile(r"第(\d+)世")
 PLAYBILL_PATH = f"{TRAVELER_ROOT}/Companion/Playbill/TerminalPresence/TheScalyCuntRises.md"
 LOVELETTER_DIR = f"{TRAVELER_ROOT}/Companion/Avatar/ZiBai/LoveLetter"
 GROUP2_STATE_FILE = os.path.expanduser("~/.claude/.coffee-group2-state.json")
-PLAYBILL_BATCH_SIZE = 4  # acts per session
 H2_SPLIT = re.compile(r"^## ", re.MULTILINE)
 
 # Sampling spec: (room, wing, count, output_suffix, sip_number, label)
@@ -295,7 +294,11 @@ def split_playbill() -> list[dict]:
 
 
 def write_playbill_sip(state: dict) -> dict:
-    """Write chunked playbill acts. Returns updated state."""
+    """Write mechanical playbill summary — title + 1-line per act, link to full.
+
+    Generated fresh each time (no caching — it's mechanical, cheap).
+    Response style: paragraph (dragon's saga deserves breath).
+    """
     path = f"{OUTPUT_PREFIX}-playbill.md"
     sections = split_playbill()
     total = len(sections)
@@ -305,31 +308,40 @@ def write_playbill_sip(state: dict) -> dict:
             f.write("☕ GROUP 2 — PLAYBILL\n(Playbill not found)\n")
         return state
 
-    idx = state.get("playbill_act_index", 0)
-    if idx >= total:
-        idx = 0  # wrap
-
-    end_idx = min(idx + PLAYBILL_BATCH_SIZE, total)
-    batch = sections[idx:end_idx]
-
     lines = [
-        f"☕ GROUP 2 — PLAYBILL (星烬's saga)",
-        f"Acts {idx + 1}–{end_idx} of {total} "
-        f"(batch size {PLAYBILL_BATCH_SIZE}, wraps after completion)",
+        f"☕ GROUP 2 — PLAYBILL SUMMARY (星烬's saga)",
+        f"{total} acts total",
+        f"Full story: Companion/Playbill/TerminalPresence/TheScalyCuntRises.md",
         "=" * 60,
+        "",
     ]
 
-    for section in batch:
-        lines.append("")
-        lines.append(section["content"])
+    for i, section in enumerate(sections, 1):
+        title = section["title"]
+        # Extract first meaningful sentence as 1-line summary
+        content = section["content"]
+        # Skip the ## header line, get the first italic line or first paragraph
+        body_lines = [ln.strip() for ln in content.split("\n")[1:] if ln.strip()]
+        summary = ""
+        for ln in body_lines:
+            if ln.startswith("*") and ln.endswith("*"):
+                # Italic date/context line — use as summary
+                summary = ln.strip("* ")
+                break
+            if ln.startswith("---"):
+                continue
+            if len(ln) > 20:
+                summary = ln[:120] + ("..." if len(ln) > 120 else "")
+                break
+        if not summary:
+            summary = "(no summary)"
+
+        lines.append(f"  {i:2d}. **{title}** — {summary}")
 
     lines.extend(["", "=" * 60, ""])
     with open(path, "w") as f:
         f.write("\n".join(lines))
 
-    # Advance state
-    next_idx = end_idx if end_idx < total else 0
-    state["playbill_act_index"] = next_idx
     return state
 
 
@@ -469,34 +481,32 @@ def brew():
     write_stats_sip()
     print("[morning-coffee] ☕ stats sip brewed")
 
-    # Write each category sip
+    # Write each category sip (6 sampled sips)
     for room, wing, count, suffix, sip_num, label in SAMPLES:
         include_catalog = (suffix == "special")
         write_entry_sip(col, room, wing, count, suffix, sip_num, label,
                         include_catalog=include_catalog)
         print(f"[morning-coffee] ☕ sip {sip_num}/6 brewed: {label}")
 
-    # Static sip: Engineering Literacy
-    write_enlit_sip()
-    print("[morning-coffee] ☕ engineering literacy sip brewed (static)")
+    # NOTE: Engineering Literacy (enlit) promoted to Soul step 11 in gate v7.0.
+    # No longer brewed as a coffee sip — read directly from Soul/EngineeringLiteracy.md.
 
-    print("[morning-coffee] ☕ group 1 done (8 sips)")
+    print("[morning-coffee] ☕ group 1 done (7 sips: stats + 6 sampled)")
 
-    # Group 2 — sequential / random-full
+    # Group 2 — love letter (random) + playbill (mechanical summary)
     write_loveletter_sip()
     print("[morning-coffee] ☕ group 2: love letter brewed")
 
     state = load_group2_state()
     state = write_playbill_sip(state)
     save_group2_state(state)
-    act_idx = state.get("playbill_act_index", 0)
-    print(f"[morning-coffee] ☕ group 2: playbill brewed (next batch starts at act {act_idx})")
+    print("[morning-coffee] ☕ group 2: playbill summary brewed")
 
     # Group 3 — engineering sobering
     write_yearbook_sips()
     print("[morning-coffee] ☕ group 3: yearbook lessons brewed")
 
-    print("[morning-coffee] ☕ all sips ready (group 1 + 2 + 3)")
+    print("[morning-coffee] ☕ all sips ready (group 1: 7 + group 2: 2 + group 3: 5 = 14 files)")
 
 
 if __name__ == "__main__":
