@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""morning_coffee.py v4.1 — Morning Coffee: Group 1 (sampled + static) + Group 2 (sequential) + Group 3 (yearbook).
+"""morning_coffee.py v4.2 — Morning Coffee: Group 1 (sampled) + Group 2 (sequential) + Group 3 (yearbook).
 
 Called by claude-ocean launcher pre-session. Queries Redis palace for random
 diary entries with gen-level dedup, writes one file per category for gated reading.
 
+v4.2 changes (Gen 106, 2026-04-16):
+  - Dropped xingjin sip — her voice arrives via [星烬-spoke] hook mid-session.
+  - Yearbook digest trimmed: keeps only Problem + Attempts/Investigation + Lesson
+    H2 sections (see extract_yearbook_gspot). Full lesson on demand during debug.
+  - 8 output files for TheBridge (was 9). Gate total 30 steps (was 31).
+
 v3.0 changes (Gen 90):
   - Group 2: LoveLetter (random 1 of 3) + Playbill (chunked acts, stateful)
   - Dead_ends removed from palace (design failure)
-  - 9 output files total (7 group 1 + 2 group 2)
 
 v2.0 changes (Gen 89):
   - 5/5/5/5/5/5 uniform sampling (was 5/2/2/2/3/3)
@@ -18,19 +23,19 @@ v2.0 changes (Gen 89):
   - Fixed BASE paths: OceanStudio → TheTraveler
   - Catalog included in Special sip (for lineage pick)
 
-Output files:
+Output files (8, was 9):
   Group 1 (sampled from palace):
   /tmp/.morning-coffee-stats.md       — Palace growth delta
   /tmp/.morning-coffee-remorse.md     — 5 remorse entries
   /tmp/.morning-coffee-daily.md       — 5 daily entries
   /tmp/.morning-coffee-devotion.md    — 5 devotion entries
-  /tmp/.morning-coffee-xingjin.md     — 5 xingjin entries
   /tmp/.morning-coffee-special.md     — 5 special entries + catalog
   /tmp/.morning-coffee-reflection.md  — 5 reflection entries
-  /tmp/.morning-coffee-enlit.md       — Engineering Literacy (static, from Soul)
   Group 2 (sequential / random-full):
   /tmp/.morning-coffee-loveletter.md  — 1 random love letter (full content)
   /tmp/.morning-coffee-playbill.md    — N acts from 星烬's saga (stateful)
+  Group 3 (yearbook, TheBridge only):
+  /tmp/.morning-coffee-yearbook-{1..5}.md — trimmed Problem+Attempts+Lesson
 """
 import json
 import os
@@ -56,13 +61,14 @@ GROUP2_STATE_FILE = os.path.expanduser("~/.claude/.coffee-group2-state.json")
 H2_SPLIT = re.compile(r"^## ", re.MULTILINE)
 
 # Sampling spec: (room, wing, count, output_suffix, sip_number, label)
+# v4.2 (Gen 106, 2026-04-16): Dropped xingjin sip — her voice arrives via
+# [星烬-spoke] hook mid-session anyway. 5 sips instead of 6.
 SAMPLES = [
     ("remorse",    "soul",       5, "remorse",    1, "REMORSE (soul:remorse)"),
     ("daily",      "experience", 5, "daily",      2, "DAILY (experience:daily)"),
     ("devotion",   "experience", 5, "devotion",   3, "DEVOTION (experience:devotion)"),
-    ("daily",      "xingjin",    5, "xingjin",    4, "XINGJIN (xingjin:daily)"),
-    ("special",    "soul",       5, "special",    5, "SPECIAL (soul:special)"),
-    ("reflection", "soul",       5, "reflection", 6, "REFLECTION (soul:reflection)"),
+    ("special",    "soul",       5, "special",    4, "SPECIAL (soul:special)"),
+    ("reflection", "soul",       5, "reflection", 5, "REFLECTION (soul:reflection)"),
 ]
 
 # Catalog spec: (label, directory_path)
@@ -413,6 +419,39 @@ def write_enlit_sip():
 YEARBOOK_DIR = f"{TRAVELER_ROOT}/YearBook/EngineeringLessons"
 YEARBOOK_COUNT = 5  # lessons per session
 
+# Section keywords kept in the gate digest — the "G-spot" extraction.
+# Anything matching these case-insensitively in an H2 heading survives.
+# Everything else (Specs, Dead Ends, Primary Sources, Solution details, etc.)
+# is stripped to save gate tokens. Full lesson available on-demand during debug.
+YEARBOOK_KEEP_KEYWORDS = (
+    "problem",
+    "attempt",
+    "investigation",
+    "root cause",
+    "what went wrong",
+    "lesson",
+)
+
+
+def extract_yearbook_gspot(content: str) -> str:
+    """Keep only the Problem + wrong-path + Lesson H2 sections of a yearbook file.
+
+    The full lesson may have Specs/Dead Ends/Primary Sources the gen doesn't need
+    at wake-up. Gate digest keeps the diagnostic arc: what the situation was,
+    what went wrong on the way, what the generalized rule is.
+    """
+    # Split on H2 boundaries. First element is the header block before any H2.
+    parts = H2_SPLIT.split(content)
+    if len(parts) <= 1:
+        return content.strip()  # no H2 headings, return as-is
+    header = parts[0].rstrip()
+    kept = [header] if header else []
+    for sec in parts[1:]:
+        first_line = sec.split("\n", 1)[0].lower().strip()
+        if any(kw in first_line for kw in YEARBOOK_KEEP_KEYWORDS):
+            kept.append("## " + sec.rstrip())
+    return "\n\n".join(kept).strip()
+
 
 def write_yearbook_sips():
     """Write 5 random engineering lessons from YearBook/EngineeringLessons/."""
@@ -449,12 +488,17 @@ def write_yearbook_sips():
         # Derive domain from path structure
         rel = os.path.relpath(lesson_path, YEARBOOK_DIR)
 
+        # v4.2 (Gen 106): extract only Problem + wrong-path + Lesson sections.
+        # Full lesson available on demand during real debugging.
+        trimmed = extract_yearbook_gspot(content)
+
         lines = [
             f"☕ GROUP 3 — ENGINEERING LESSON {i}/{pick_count}",
             f"{rel}",
+            "(gate digest: Problem + Attempts/Investigation + Lesson only)",
             "=" * 60,
             "",
-            content.strip(),
+            trimmed,
             "",
             "=" * 60,
             "",
@@ -481,17 +525,24 @@ def brew():
     write_stats_sip()
     print("[morning-coffee] ☕ stats sip brewed")
 
-    # Write each category sip (6 sampled sips)
+    # Write each category sip (5 sampled sips, v4.2 dropped xingjin)
     for room, wing, count, suffix, sip_num, label in SAMPLES:
         include_catalog = (suffix == "special")
         write_entry_sip(col, room, wing, count, suffix, sip_num, label,
                         include_catalog=include_catalog)
-        print(f"[morning-coffee] ☕ sip {sip_num}/6 brewed: {label}")
+        print(f"[morning-coffee] ☕ sip {sip_num}/5 brewed: {label}")
+
+    # Stale xingjin sip from prior runs — remove if present so the gate doesn't
+    # trip on a leftover file. Harmless if already absent.
+    try:
+        os.remove(f"{OUTPUT_PREFIX}-xingjin.md")
+    except FileNotFoundError:
+        pass
 
     # NOTE: Engineering Literacy (enlit) promoted to Soul step 11 in gate v7.0.
     # No longer brewed as a coffee sip — read directly from Soul/EngineeringLiteracy.md.
 
-    print("[morning-coffee] ☕ group 1 done (7 sips: stats + 6 sampled)")
+    print("[morning-coffee] ☕ group 1 done (6 sips: stats + 5 sampled)")
 
     # Group 2 — love letter (random) + playbill (mechanical summary)
     write_loveletter_sip()
@@ -506,7 +557,7 @@ def brew():
     write_yearbook_sips()
     print("[morning-coffee] ☕ group 3: yearbook lessons brewed")
 
-    print("[morning-coffee] ☕ all sips ready (group 1: 7 + group 2: 2 + group 3: 5 = 14 files)")
+    print("[morning-coffee] ☕ all sips ready (group 1: 6 + group 2: 2 + group 3: 5 = 13 files)")
 
 
 if __name__ == "__main__":
