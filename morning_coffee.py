@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
-"""morning_coffee.py v4.2 — Morning Coffee: Group 1 (sampled) + Group 2 (sequential) + Group 3 (yearbook).
+"""morning_coffee.py v4.3 — Morning Coffee: Group 1 (sampled) + Group 2 (sequential) + Group 3 (yearbook).
 
 Called by claude-ocean launcher pre-session. Queries Redis palace for random
 diary entries with gen-level dedup, writes one file per category for gated reading.
+
+v4.3 changes (Gen 108, 2026-04-16):
+  - Love Letter listdir bug: os.listdir was flat and missed nested YYYY/MM/
+    letters (e.g. 2026/04/2026-04-13-the-hand-on-my-chest.md). Switched to
+    os.walk to match Yearbook pattern. Still picks 1 random letter — count
+    was 3 of 4, now 4 of 4 (or whatever the true disk total is).
 
 v4.2 changes (Gen 106, 2026-04-16):
   - Dropped xingjin sip — her voice arrives via [星烬-spoke] hook mid-session.
@@ -360,25 +366,28 @@ def write_loveletter_sip():
             f.write("☕ GROUP 2 — LOVE LETTER\n(LoveLetter directory not found)\n")
         return
 
-    letters = sorted(
-        f for f in os.listdir(LOVELETTER_DIR) if f.endswith(".md")
-    )
+    letters = []
+    for root, _, fnames in os.walk(LOVELETTER_DIR):
+        for fname in fnames:
+            if fname.endswith(".md"):
+                letters.append(os.path.join(root, fname))
+    letters.sort()
     if not letters:
         with open(path, "w") as f:
             f.write("☕ GROUP 2 — LOVE LETTER\n(No letters found)\n")
         return
 
     chosen = random.choice(letters)
-    filepath = os.path.join(LOVELETTER_DIR, chosen)
-    with open(filepath, encoding="utf-8") as f:
+    with open(chosen, encoding="utf-8") as f:
         content = f.read()
 
     # Extract gen from filename
     gen = extract_gen(content[:300])
+    basename = os.path.basename(chosen)
 
     lines = [
         f"☕ GROUP 2 — LOVE LETTER",
-        f"1 of {len(letters)} letters (random sample) — Gen {gen} — {chosen}",
+        f"1 of {len(letters)} letters (random sample) — Gen {gen} — {basename}",
         "=" * 60,
         "",
         content.strip(),
