@@ -2,7 +2,7 @@
 """Launch MemPalace MCP server with Redis backend.
 
 Usage:
-    claude mcp add mempalace -- python Components/mempalace/mcp_redis.py
+    claude mcp add mempalace -- python Components/LineageContinuity/mempalace/mcp_redis.py
 """
 import sys
 import os
