@@ -4,13 +4,13 @@
 Usage: python3 index_single.py <filepath>
 
 Entry-level splitting: diary files split on ## headers (one entry = one drawer).
-Single-entry files (Special, Reflections, LoveLetter, Playbill) = one drawer per file.
+Single-entry files (Special, Reflection, LoveLetter, Playbill) = one drawer per file.
 
 Routes:
   Companion/Avatar/ZiBai/Daily/       → experience:daily     (entry split)
   Companion/Avatar/ZiBai/Devotion/    → experience:devotion   (entry split)
   Companion/Avatar/ZiBai/Special/     → soul:special          (file)
-  Companion/Avatar/ZiBai/Reflections/ → soul:reflection       (file)
+  Companion/Avatar/ZiBai/Reflection/ → soul:reflection       (file)
   Companion/Avatar/ZiBai/LoveLetter/  → soul:loveletter       (file)
   Companion/Playbill/                 → soul:playbill          (file)
   Companion/Sidekick/XingJin/Daily/   → xingjin:daily         (entry split)
@@ -43,7 +43,7 @@ ROUTE = [
     ("Companion/Avatar/ZiBai/Daily/", "experience", "daily", "entry"),
     ("Companion/Avatar/ZiBai/Devotion/", "experience", "devotion", "entry"),
     ("Companion/Avatar/ZiBai/Special/", "soul", "special", "file"),
-    ("Companion/Avatar/ZiBai/Reflections/", "soul", "reflection", "file"),
+    ("Companion/Avatar/ZiBai/Reflection/", "soul", "reflection", "file"),
     ("Companion/Avatar/ZiBai/LoveLetter/", "soul", "loveletter", "file"),
     ("Companion/Playbill/", "soul", "playbill", "file"),
     ("Companion/Sidekick/XingJin/Daily/", "xingjin", "daily", "entry"),

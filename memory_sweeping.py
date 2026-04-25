@@ -2,7 +2,7 @@
 """memory_sweeping.py v2.1 — Sweep TheTraveler files into Redis palace.
 
 Entry-level indexing: diary files split on ## headers (one entry = one drawer).
-Single-entry files (Special, Reflections, LoveLetter, Playbill) = one drawer per file.
+Single-entry files (Special, Reflection, LoveLetter, Playbill) = one drawer per file.
 
 v2.1 changes (Gen 91):
   - Generation-aware baseline: only update baseline when gen changes.
@@ -16,7 +16,7 @@ v2.0 changes (Gen 89):
 
 Routes:
   soul:special      — Special/ entries
-  soul:reflection   — Reflections/ entries
+  soul:reflection   — Reflection/ entries
   soul:remorse      — Soul/Remorse/ entries
   soul:loveletter   — LoveLetter/ entries
   soul:playbill     — Playbill/ entries
@@ -30,6 +30,8 @@ import re
 import sys
 import os
 import time
+import uuid
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ["MEMPALACE_BACKEND"] = "redis"
@@ -155,34 +157,71 @@ def count_per_wing_room(col) -> dict:
 def save_stats_and_delta(current: dict, previous: dict):
     """Persist current counts, write delta for morning coffee.
 
-    Generation-aware: baseline only updates when gen changes.
-    Within the same gen, delta accumulates across sessions.
+    Gen 127 (2026-04-19): baseline is ROLLING — advances on every fresh
+    sweep (claude-ocean without -r). The delta represents growth since
+    the LAST fresh session, not since the current gen started. The old
+    gen-gated "accumulate across sessions within same gen" behaviour was
+    swallowing inter-session deltas into a single cumulative number.
+
+    Gen 127 also enriches both delta AND baseline with a `_meta` block —
+    captured_at (ISO local timestamp), session_id (8-hex UUID minted at
+    sweep time), gen, landing (CWD basename). The delta inherits the
+    PREVIOUS baseline's _meta as `baseline_*` fields so morning coffee
+    can render a full provenance row + interval.
     """
     current_gen = get_current_gen()
+    prev_meta = previous.pop("_meta", None) or {}
     prev_gen = previous.pop("_gen", 0)
 
-    # Calculate delta (current vs baseline, skip _gen — keep _total)
+    now = datetime.now(timezone.utc).astimezone()
+    current_meta = {
+        "captured_at": now.isoformat(timespec="seconds"),
+        "session_id": uuid.uuid4().hex[:8],
+        "gen": current_gen,
+        "landing": os.path.basename(os.getcwd()) or "unknown",
+    }
+
+    # Calculate delta (current vs baseline, skip _gen + _meta — keep _total)
     delta = {}
     count_keys = sorted(set(list(current.keys()) + list(previous.keys())))
     for key in count_keys:
-        if key == "_gen":
+        if key in ("_gen", "_meta"):
             continue
         prev = previous.get(key, 0)
         curr = current.get(key, 0)
         delta[key] = {"previous": prev, "current": curr, "delta": curr - prev}
+
+    # Legacy + new _meta block. Keep `_gen` for back-compat with morning_coffee
+    # readers that haven't been updated yet.
     delta["_gen"] = {"baseline_gen": prev_gen, "current_gen": current_gen}
+    delta["_meta"] = dict(current_meta)
+    delta["_meta"]["baseline_captured_at"] = prev_meta.get("captured_at")
+    delta["_meta"]["baseline_session_id"] = prev_meta.get("session_id")
+    delta["_meta"]["baseline_gen"] = prev_gen or prev_meta.get("gen")
+    delta["_meta"]["baseline_landing"] = prev_meta.get("landing")
+    # Interval in seconds (None if no prior baseline)
+    if prev_meta.get("captured_at"):
+        try:
+            prev_dt = datetime.fromisoformat(prev_meta["captured_at"])
+            delta["_meta"]["interval_seconds"] = int((now - prev_dt).total_seconds())
+        except (ValueError, TypeError):
+            delta["_meta"]["interval_seconds"] = None
+    else:
+        delta["_meta"]["interval_seconds"] = None
+
     with open(DELTA_FILE, "w") as f:
         json.dump(delta, f, indent=2)
 
-    # Only update baseline when generation changes (or first run)
-    if current_gen != prev_gen:
-        baseline = dict(current)
-        baseline["_gen"] = current_gen
-        with open(STATS_FILE, "w") as f:
-            json.dump(baseline, f, indent=2)
-        print(f"  [stats] Gen changed ({prev_gen} → {current_gen}), baseline updated")
-    else:
-        print(f"  [stats] Same gen ({current_gen}), baseline preserved (delta accumulates)")
+    # Rolling baseline: advance on EVERY fresh sweep so the next delta
+    # measures growth since THIS session, not growth since the gen started.
+    baseline = dict(current)
+    baseline["_gen"] = current_gen
+    baseline["_meta"] = current_meta
+    with open(STATS_FILE, "w") as f:
+        json.dump(baseline, f, indent=2)
+    gen_note = f"gen {current_gen}" if current_gen == prev_gen else f"gen {prev_gen} → {current_gen}"
+    print(f"  [stats] Rolling baseline advanced ({gen_note}) "
+          f"(session={current_meta['session_id']}, captured={current_meta['captured_at']})")
 
 
 def sweep_all():
